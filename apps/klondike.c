@@ -73,6 +73,11 @@ static card_game_st game;
 static int state;
 static int ticks_waited;
 
+static card_pile_st *press_pile;
+static point_st press_origin;
+static int dragged;
+static int press_grabbed;
+
 static void
 draw_all_piles(void)
 {
@@ -423,8 +428,20 @@ pile_draw(widget_st *widget)
     card_pile_draw(&game, all_piles[widget->tag1]);
 }
 
+static card_pile_st *
+pile_under(point_st pos)
+{
+    widget_st *w = gui_window_find_widget_at(&window, pos);
+
+    if (w >= pile_widgets && w < pile_widgets + PILE_COUNT) {
+        return all_piles[w - pile_widgets];
+    }
+
+    return NULL;
+}
+
 static void
-on_pile_pointer_up(widget_st *widget, event_st event _unsd, point_st pos)
+on_pile_pointer_down(widget_st *widget, event_st event _unsd, point_st pos)
 {
     if (state != STATE_DEFAULT) {
         return;
@@ -432,9 +449,12 @@ on_pile_pointer_up(widget_st *widget, event_st event _unsd, point_st pos)
 
     card_pile_st *pile = all_piles[widget->tag1];
 
+    press_pile = pile;
+    press_origin = pos;
+    dragged = 0;
+    press_grabbed = 0;
+
     if (pile->type == PILE_STOCK) {
-        cancel_move();
-        draw_card_from_stock();
         return;
     }
 
@@ -450,11 +470,57 @@ on_pile_pointer_up(widget_st *widget, event_st event _unsd, point_st pos)
         }
 
         start_move(pile, pile->count - idx);
-    } else if (pile == game.cur_move.src) {
+        press_grabbed = 1;
+    }
+}
+
+static void
+on_pile_pointer_move(widget_st *widget _unsd, event_st event _unsd, point_st pos)
+{
+    int dx = pos.x - press_origin.x;
+    int dy = pos.y - press_origin.y;
+
+    if (!press_pile) {
+        return;
+    }
+
+    if (dx > 3 || dx < -3 || dy > 3 || dy < -3) {
+        dragged = 1;
+    }
+}
+
+static void
+on_pile_pointer_up(widget_st *widget _unsd, event_st event _unsd, point_st pos)
+{
+    if (state != STATE_DEFAULT) {
+        return;
+    }
+
+    card_pile_st *pressed = press_pile;
+    card_pile_st *release_pile = pile_under(pos);
+
+    press_pile = NULL;
+
+    if (pressed && pressed->type == PILE_STOCK && !dragged) {
         cancel_move();
-    } else {
-        game.cur_move.dst = pile;
+        draw_card_from_stock();
+        return;
+    }
+
+    if (game.cur_move.src == NULL) {
+        return;
+    }
+
+    if (release_pile && release_pile != game.cur_move.src) {
+        game.cur_move.dst = release_pile;
         request_move();
+        return;
+    }
+
+    if (dragged) {
+        cancel_move();
+    } else if (!press_grabbed) {
+        cancel_move();
     }
 }
 
@@ -537,8 +603,11 @@ init_game(void)
 
     for (i = 0; i < PILE_COUNT; ++i) {
         pile_widgets[i].draw = pile_draw;
+        pile_widgets[i].on_pointer_down = on_pile_pointer_down;
+        pile_widgets[i].on_pointer_move = on_pile_pointer_move;
         pile_widgets[i].on_pointer_up = on_pile_pointer_up;
         pile_widgets[i].on_pointer_alt = on_pile_pointer_alt;
+        pile_widgets[i].press_sticky = 1;
         pile_widgets[i].tag1 = i;
     }
 
